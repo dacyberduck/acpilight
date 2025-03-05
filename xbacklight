@@ -14,6 +14,49 @@ import os, sys
 import time
 from math import log10
 
+# Add new imports for cache directory handling
+from pathlib import Path
+import json
+
+# Define cache directory and file
+CACHE_DIR = os.path.expanduser("~/.cache/acpilight")
+BRIGHTNESS_STORE = os.path.join(CACHE_DIR, "stored_brightness.json")
+
+def ensure_cache_dir():
+    """Ensure the cache directory exists"""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+def store_brightness(ctrl_name, brightness):
+    """Store the current brightness value"""
+    ensure_cache_dir()
+    data = {}
+    
+    # Load existing data if any
+    if os.path.exists(BRIGHTNESS_STORE):
+        with open(BRIGHTNESS_STORE, 'r') as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
+    
+    # Update with new value
+    data[ctrl_name] = brightness
+    
+    # Save to file
+    with open(BRIGHTNESS_STORE, 'w') as f:
+        json.dump(data, f)
+
+def restore_brightness(ctrl_name):
+    """Restore the stored brightness value"""
+    if not os.path.exists(BRIGHTNESS_STORE):
+        return None
+        
+    try:
+        with open(BRIGHTNESS_STORE, 'r') as f:
+            data = json.load(f)
+            return data.get(ctrl_name)
+    except (json.JSONDecodeError, IOError):
+        return None
 
 def error(msg):
     print(sys.argv[0] + ": " + msg)
@@ -124,6 +167,9 @@ def main():
     g.add_argument("-set", metavar="PERCENT", type=float, help="Set brightness")
     g.add_argument("-inc", metavar="PERCENT", type=float, help="Increase brightness")
     g.add_argument("-dec", metavar="PERCENT", type=float, help="Decrease brightness")
+    # Add new store and restore arguments
+    g.add_argument("-store", action="store_true", help="Store current brightness")
+    g.add_argument("-restore", action="store_true", help="Restore previous brightness")
     g.add_argument("pc", metavar="PERCENT", type=pc, nargs='?',
                    help="[=+-]PERCENT to set, increase, decrease brightness")
     ap.add_argument("-perceived", action="store_true", help="Use perceived brightness controls")
@@ -147,17 +193,52 @@ def main():
 
     # set current operating controller
     if args.ctrl is None:
-        ctrl_path = next(iter(ctrls.values()))
+        ctrl_name = next(iter(ctrls.keys()))
+        ctrl_path = ctrls[ctrl_name]
     else:
         if args.ctrl not in ctrls:
             error("unknown controller '{}'".format(args.ctrl))
             return 1
-        ctrl_path = ctrls[args.ctrl]
+        ctrl_name = args.ctrl
+        ctrl_path = ctrls[ctrl_name]
 
     if args.perceived:
         ctrl = LogController(ctrl_path)
     else:
         ctrl = PcController(ctrl_path)
+
+    # Handle fps to steps conversion
+    if args.fps:
+        args.steps = int((args.fps/1000) * args.time)
+
+    # Handle store operation
+    if args.store:
+        current = ctrl.brightness
+        store_brightness(ctrl_name, current)
+        print(f"Stored brightness value: {current}%")
+        return 0
+        
+    # Handle restore operation with steps support
+    if args.restore:
+        stored = restore_brightness(ctrl_name)
+        if stored is None:
+            error("No stored brightness value found")
+            return 1
+        
+        current = ctrl.brightness
+        target = stored
+        
+        # Use the same steps logic as other brightness changes
+        target = clamp(target, 0, ctrl.max_brightness)
+        if current == target:
+            pass
+        elif args.steps <= 1 or args.time < 1:
+            ctrl.brightness = target
+        else:
+            sweep_brightness(ctrl, current, target, args.steps, args.time)
+        
+        print(f"Restored brightness to: {target}%")
+        return 0
 
     # uniform set arguments
     if args.pc is not None:
@@ -168,8 +249,6 @@ def main():
             args.inc = v
         elif args.pc[0] == '-':
             args.dec = v
-    if args.fps:
-        args.steps = int((args.fps/1000) * args.time)
 
     # perform the requested action
     if args.getf:
