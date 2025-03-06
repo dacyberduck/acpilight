@@ -40,7 +40,7 @@ def store_brightness(ctrl_name, brightness):
     """Store the current brightness value"""
     ensure_cache_dir()
     data = {}
-    
+
     # Load existing data if any
     if os.path.exists(BRIGHTNESS_STORE):
         with open(BRIGHTNESS_STORE, 'r') as f:
@@ -48,10 +48,10 @@ def store_brightness(ctrl_name, brightness):
                 data = json.load(f)
             except json.JSONDecodeError:
                 data = {}
-    
+
     # Update with new value
     data[ctrl_name] = brightness
-    
+
     # Save to file
     with open(BRIGHTNESS_STORE, 'w') as f:
         json.dump(data, f)
@@ -60,7 +60,7 @@ def restore_brightness(ctrl_name):
     """Restore the stored brightness value"""
     if not os.path.exists(BRIGHTNESS_STORE):
         return None
-        
+
     try:
         with open(BRIGHTNESS_STORE, 'r') as f:
             data = json.load(f)
@@ -72,22 +72,23 @@ def monitor_brightness(ctrl, poll_interval=DEFAULT_POLL_INTERVAL):
     """Monitor brightness changes and print when they occur"""
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     last_brightness = None
-    
+
     try:
         while True:
             current = ctrl.brightness
-            
+
             # Only print if brightness has changed
             if current != last_brightness:
                 print(f"{current:.1f}")
+                sys.stdout.flush()
                 last_brightness = current
-                
+
             time.sleep(poll_interval)
-            
+
     except GracefulExit:
-        print("\nStopped monitoring brightness changes.")
+        print("\nStopped monitoring brightness changes.", flush=True)
         return 0
     except Exception as e:
         error(f"Error while monitoring: {str(e)}")
@@ -261,17 +262,17 @@ def main():
         store_brightness(ctrl_name, current)
         print(f"Stored brightness value: {current}%")
         return 0
-        
+
     # Handle restore operation with steps support
     if args.restore:
         stored = restore_brightness(ctrl_name)
         if stored is None:
             error("No stored brightness value found")
             return 1
-        
+
         current = ctrl.brightness
         target = stored
-        
+
         # Use the same steps logic as other brightness changes
         target = clamp(target, 0, ctrl.max_brightness)
         if current == target:
@@ -280,7 +281,7 @@ def main():
             ctrl.brightness = target
         else:
             sweep_brightness(ctrl, current, target, args.steps, args.time)
-        
+
         print(f"Restored brightness to: {target}%")
         return 0
 
