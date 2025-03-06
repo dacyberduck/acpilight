@@ -13,14 +13,24 @@ from collections import OrderedDict
 import os, sys
 import time
 from math import log10
+import json
+import signal
 
 # Add new imports for cache directory handling
 from pathlib import Path
-import json
 
 # Define cache directory and file
 CACHE_DIR = os.path.expanduser("~/.cache/acpilight")
 BRIGHTNESS_STORE = os.path.join(CACHE_DIR, "stored_brightness.json")
+
+# Default polling interval for subscribe mode (in seconds)
+DEFAULT_POLL_INTERVAL = 0.1
+
+class GracefulExit(Exception):
+    pass
+
+def signal_handler(signum, frame):
+    raise GracefulExit()
 
 def ensure_cache_dir():
     """Ensure the cache directory exists"""
@@ -57,6 +67,31 @@ def restore_brightness(ctrl_name):
             return data.get(ctrl_name)
     except (json.JSONDecodeError, IOError):
         return None
+
+def monitor_brightness(ctrl, poll_interval=DEFAULT_POLL_INTERVAL):
+    """Monitor brightness changes and print when they occur"""
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    last_brightness = None
+    
+    try:
+        while True:
+            current = ctrl.brightness
+            
+            # Only print if brightness has changed
+            if current != last_brightness:
+                print(f"{current:.1f}")
+                last_brightness = current
+                
+            time.sleep(poll_interval)
+            
+    except GracefulExit:
+        print("\nStopped monitoring brightness changes.")
+        return 0
+    except Exception as e:
+        error(f"Error while monitoring: {str(e)}")
+        return 1
 
 def error(msg):
     print(sys.argv[0] + ": " + msg)
@@ -105,6 +140,8 @@ class PcController(RawController):
 
     @property
     def brightness(self):
+        if super().brightness == 0:
+            return 0
         return super().brightness*100/super().max_brightness
 
     @brightness.setter
@@ -167,9 +204,9 @@ def main():
     g.add_argument("-set", metavar="PERCENT", type=float, help="Set brightness")
     g.add_argument("-inc", metavar="PERCENT", type=float, help="Increase brightness")
     g.add_argument("-dec", metavar="PERCENT", type=float, help="Decrease brightness")
-    # Add new store and restore arguments
     g.add_argument("-store", action="store_true", help="Store current brightness")
     g.add_argument("-restore", action="store_true", help="Restore previous brightness")
+    g.add_argument("-subscribe", action="store_true", help="Monitor brightness changes")
     g.add_argument("pc", metavar="PERCENT", type=pc, nargs='?',
                    help="[=+-]PERCENT to set, increase, decrease brightness")
     ap.add_argument("-perceived", action="store_true", help="Use perceived brightness controls")
@@ -181,6 +218,9 @@ def main():
                     default=0, help="Fading steps (default: 0)")
     g.add_argument("-fps", type=int,
                     default=0, help="Fading frame rate (default: 0)")
+    ap.add_argument("-interval", type=float,
+                    default=DEFAULT_POLL_INTERVAL,
+                    help=f"Polling interval in seconds for subscribe mode (default: {DEFAULT_POLL_INTERVAL})")
     ap.add_argument("-display", help="Ignored")
     args = ap.parse_args()
 
@@ -210,6 +250,10 @@ def main():
     # Handle fps to steps conversion
     if args.fps:
         args.steps = int((args.fps/1000) * args.time)
+
+    # Handle subscribe mode
+    if args.subscribe:
+        return monitor_brightness(ctrl, args.interval)
 
     # Handle store operation
     if args.store:
